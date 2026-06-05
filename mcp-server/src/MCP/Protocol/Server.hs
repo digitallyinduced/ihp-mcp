@@ -59,19 +59,29 @@ data McpServer p = McpServer
       -- the @Host@ header with a @localhost@ fallback.
     }
 
--- | An 'McpServer' with sensible defaults: no scope wrapping, issuer resolved
--- from the @Host@ header. Supply name, version, auth and tools.
-defaultMcpServer
-    :: Text
-    -> Text
-    -> (Wai.Request -> IO (Maybe p))
-    -> (Wai.Request -> p -> [Tool])
-    -> McpServer p
-defaultMcpServer name version auth toolsFn = McpServer
-    { serverName = name
-    , serverVersion = version
-    , authenticate = auth
-    , tools = toolsFn
+-- | A default 'McpServer' to customise with record-update syntax:
+--
+-- > mcpServer = defaultMcpServer
+-- >     { serverName    = "myapp-mcp"
+-- >     , serverVersion = "0.1.0"
+-- >     , authenticate  = \request -> ...
+-- >     , tools         = \request principal -> [ ... ]
+-- >     }
+--
+-- The two "required" fields fail closed rather than crash: 'authenticate'
+-- denies every request and 'tools' is empty until you override them, so a
+-- half-configured server 401s instead of throwing. 'withScope' is a no-op and
+-- 'resolveIssuer' reads the @Host@ header (with a @localhost@ fallback).
+--
+-- Prefer this over a positional constructor: adding a new (defaulted) field to
+-- 'McpServer' stays backwards-compatible — every existing record-update call
+-- site keeps compiling.
+defaultMcpServer :: McpServer p
+defaultMcpServer = McpServer
+    { serverName = "mcp-server"
+    , serverVersion = "0.1.0"
+    , authenticate = \_ -> pure Nothing
+    , tools = \_ _ -> []
     , withScope = \_ io -> io
     , resolveIssuer = WellKnown.resolveIssuer "localhost"
     }

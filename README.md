@@ -38,8 +38,12 @@ line.
    import qualified IHP.MCP.Auth as Mcp.Auth
 
    mcpServer :: (?modelContext :: ModelContext) => Mcp.McpServer User
-   mcpServer = (Mcp.defaultMcpServer "myapp-mcp" "0.1.0" authenticate tools)
-       { Mcp.withScope     = \user -> withRowLevelSecurity user   -- optional
+   mcpServer = Mcp.defaultMcpServer
+       { Mcp.serverName    = "myapp-mcp"
+       , Mcp.serverVersion = "0.1.0"
+       , Mcp.authenticate  = authenticate
+       , Mcp.tools         = tools
+       , Mcp.withScope     = \user -> withRowLevelSecurity user   -- optional
        , Mcp.resolveIssuer = WellKnown.resolveIssuer "myapp.example"
        }
      where
