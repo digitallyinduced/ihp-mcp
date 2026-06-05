@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  mcp-server:
+    name: mcp-server (framework-free core)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp-server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.10.3'
+          cabal-version: '3.12.1.0'
+
+      # The repo's root cabal.project also lists ihp-mcp, which depends on `ihp`
+      # (not a plain Hackage package). Build the core in isolation so CI stays
+      # cabal-only — the ihp-mcp glue + its OAuth integration test build under
+      # the IHP nix toolchain (see test/Spec.hs).
+      - name: Isolate the mcp-server package
+        run: echo 'packages: .' > cabal.project
+
+      - name: Build
+        run: cabal build
+
+      - name: Test
+        run: cabal test --test-show-details=direct

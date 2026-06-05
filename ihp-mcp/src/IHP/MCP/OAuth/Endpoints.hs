@@ -117,23 +117,29 @@ handleAuthCodeGrant params = do
             (row : _) -> do
                 now <- getCurrentTime
                 let badGrant = pure . jsonErr HTTP.status400 "invalid_grant"
-                if isJust row.acConsumedAt then do
-                    -- Replay of an already-used code: revoke any tokens the
-                    -- first exchange minted, then reject. (Defense in depth.)
-                    _ <- unsafeSqlExec
+                    -- Replay mitigation: revoke any tokens minted off this code.
+                    replayRevoke = unsafeSqlExec
                         "UPDATE api_tokens SET revoked_at = NOW() WHERE client_id = ? AND created_at >= ? AND revoked_at IS NULL"
                         (row.acClientId, row.acExpiresAt)
-                    badGrant "code already used"
+                if isJust row.acConsumedAt then replayRevoke >> badGrant "code already used"
                 else if row.acExpiresAt <= now then badGrant "code expired"
                 else if row.acClientId /= clientId then badGrant "client_id mismatch"
                 else if row.acRedirectUri /= redirectUri then badGrant "redirect_uri mismatch"
                 else if not (OAuth.verifyPkceS256 codeVerifier row.acCodeChallenge) then badGrant "PKCE verification failed"
                 else do
-                    _ <- unsafeSqlExec
-                        "UPDATE oauth_authorization_codes SET consumed_at = ? WHERE code_hash = ?"
-                        (now, Binary h)
-                    (accessPlain, refreshPlain) <- issueTokenPair row.acUserId row.acClientId row.acScope now
-                    pure $ tokenResponse accessPlain refreshPlain row.acScope
+                    -- Atomically claim the code: only the request whose UPDATE
+                    -- flips consumed_at NULL→NOW() proceeds. A concurrent
+                    -- exchange gets zero rows back and is treated as a replay,
+                    -- so a stolen code can't be redeemed twice.
+                    claimed :: [Only UUID] <- unsafeSqlQuery
+                        "UPDATE oauth_authorization_codes SET consumed_at = NOW() \
+                        \WHERE code_hash = ? AND consumed_at IS NULL RETURNING id"
+                        (Only (Binary h))
+                    case claimed of
+                        [] -> replayRevoke >> badGrant "code already used"
+                        _ -> do
+                            pair <- issueTokenPair row.acUserId row.acClientId row.acScope now
+                            pure $ maybe serverError (\(a, r) -> tokenResponse a r row.acScope) pair
 
 -- | A refresh-token row, selected by its hash.
 data RefreshRow = RefreshRow
@@ -168,25 +174,35 @@ handleRefreshGrant params = do
             (row : _) -> do
                 now <- getCurrentTime
                 let badGrant = pure . jsonErr HTTP.status400 "invalid_grant"
-                if isJust row.rfRevokedAt then do
-                    -- Reuse of a revoked refresh token ⇒ revoke the whole family.
-                    forM_ row.rfParentTokenId \pid ->
+                    -- Reuse of a revoked token ⇒ revoke the whole family.
+                    revokeFamily = forM_ row.rfParentTokenId \pid ->
                         unsafeSqlExec "UPDATE api_tokens SET revoked_at = NOW() WHERE id = ? OR parent_token_id = ?" (pid, pid)
-                    badGrant "refresh token reused"
+                if isJust row.rfRevokedAt then revokeFamily >> badGrant "refresh token reused"
                 else case row.rfExpiresAt of
                     Just t | t <= now -> badGrant "refresh token expired"
                     _ | row.rfClientId /= Just clientId -> badGrant "client_id mismatch"
                     _ -> do
-                        _ <- unsafeSqlExec "UPDATE api_tokens SET revoked_at = NOW() WHERE id = ?" (Only row.rfId)
-                        forM_ row.rfParentTokenId \pid ->
-                            unsafeSqlExec "UPDATE api_tokens SET revoked_at = NOW() WHERE id = ?" (Only pid)
-                        (accessPlain, refreshPlain) <- issueTokenPair row.rfUserId clientId row.rfScope now
-                        pure $ tokenResponse accessPlain refreshPlain row.rfScope
+                        -- Atomically rotate: the request that flips revoked_at
+                        -- NULL→NOW() wins. A concurrent refresh of the same
+                        -- token gets zero rows ⇒ reuse ⇒ revoke the family.
+                        claimed :: [Only UUID] <- unsafeSqlQuery
+                            "UPDATE api_tokens SET revoked_at = NOW() \
+                            \WHERE id = ? AND revoked_at IS NULL RETURNING id"
+                            (Only row.rfId)
+                        case claimed of
+                            [] -> revokeFamily >> badGrant "refresh token reused"
+                            _ -> do
+                                forM_ row.rfParentTokenId \pid ->
+                                    unsafeSqlExec "UPDATE api_tokens SET revoked_at = NOW() WHERE id = ?" (Only pid)
+                                pair <- issueTokenPair row.rfUserId clientId row.rfScope now
+                                pure $ maybe serverError (\(a, r) -> tokenResponse a r row.rfScope) pair
 
 -- | Mint an access + refresh pair, persisting hashes. The refresh row points
 -- at the access row via @parent_token_id@ so reuse detection can revoke the
--- whole family. Returns the two plaintext tokens.
-issueTokenPair :: (?modelContext :: ModelContext) => UUID -> Text -> Text -> UTCTime -> IO (Text, Text)
+-- whole family. Returns the two plaintext tokens, or 'Nothing' if the access
+-- insert somehow returned no row (caller maps that to a 500 rather than
+-- crashing).
+issueTokenPair :: (?modelContext :: ModelContext) => UUID -> Text -> Text -> UTCTime -> IO (Maybe (Text, Text))
 issueTokenPair userId clientId scope now = do
     (accessPlain, accessHash) <- OAuth.generateAccessToken
     (refreshPlain, refreshHash) <- OAuth.generateRefreshToken
@@ -197,17 +213,15 @@ issueTokenPair userId clientId scope now = do
         "INSERT INTO api_tokens (user_id, name, token_hash, scope, kind, expires_at, client_id) \
         \VALUES (?, ?, ?, ?, 'oauth_access', ?, ?) RETURNING id"
         (userId, "OAuth access for " <> clientId, Binary accessHash, scope, accessExpires, clientId)
-    let accessId = case accessIds of
-            (Only i : _) -> i
-            _ -> error "ihp-mcp: INSERT ... RETURNING id produced no row"
-
-    _ <- unsafeSqlExec
-        "INSERT INTO api_tokens (user_id, name, token_hash, scope, kind, expires_at, client_id, parent_token_id) \
-        \VALUES (?, ?, ?, ?, 'oauth_refresh', ?, ?, ?)"
-        ( userId, "OAuth refresh for " <> clientId, Binary refreshHash, scope
-        , refreshExpires, clientId, accessId )
-
-    pure (accessPlain, refreshPlain)
+    case accessIds of
+        (Only accessId : _) -> do
+            _ <- unsafeSqlExec
+                "INSERT INTO api_tokens (user_id, name, token_hash, scope, kind, expires_at, client_id, parent_token_id) \
+                \VALUES (?, ?, ?, ?, 'oauth_refresh', ?, ?, ?)"
+                ( userId, "OAuth refresh for " <> clientId, Binary refreshHash, scope
+                , refreshExpires, clientId, accessId )
+            pure (Just (accessPlain, refreshPlain))
+        _ -> pure Nothing
 
 -- | Persist an authorization code for the @\/Authorize@ consent step. The
 -- app's controller calls this after the user approves; it owns the login
@@ -279,3 +293,8 @@ jsonErr :: HTTP.Status -> Text -> Text -> Wai.Response
 jsonErr status err desc = Wai.responseLBS status
     [(HTTP.hContentType, "application/json"), ("Cache-Control", "no-store")]
     (Aeson.encode (object [ "error" .= err, "error_description" .= desc ]))
+
+-- | RFC 6749 §5.2 doesn't define a 5xx body, but a JSON @server_error@ is the
+-- least-surprising thing to hand a client when token issuance fails internally.
+serverError :: Wai.Response
+serverError = jsonErr HTTP.status500 "server_error" "could not issue tokens"

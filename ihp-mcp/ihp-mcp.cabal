@@ -43,3 +43,31 @@ library
         ihp,
         mcp-server
     ghc-options: -Wall -Wno-name-shadowing -Wno-unused-do-bind
+
+-- Integration tests against a real Postgres (needs the IHP toolchain + a DB
+-- loaded with test/schema.sql; DATABASE_URL must point at it). Build under nix
+-- — `ihp` is not a plain Hackage dependency.
+test-suite oauth-spec
+    type:             exitcode-stdio-1.0
+    main-is:          Spec.hs
+    hs-source-dirs:   test
+    default-language: GHC2021
+    default-extensions:
+        OverloadedStrings
+        ImplicitParams
+        NoImplicitPrelude
+        BlockArguments
+    build-depends:
+        base,
+        text,
+        bytestring,
+        aeson,
+        wai,
+        http-types,
+        uuid,
+        postgresql-simple,
+        async,
+        hspec,
+        ihp,
+        ihp-mcp
+    ghc-options: -Wall -Wno-name-shadowing -Wno-unused-do-bind -threaded -rtsopts

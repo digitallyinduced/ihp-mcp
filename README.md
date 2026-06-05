@@ -103,6 +103,21 @@ ghc = prev.ghc.extend (hself: _: {
 # haskellPackages = p: with p; [ ... mcp-server ihp-mcp ... ];
 ```
 
+## Tests
+
+- **`mcp-server`** — pure, no DB. `cd mcp-server && cabal test`: PKCE against the
+  RFC 7636 Appendix-B vector, JSON-RPC envelope parse/encode, `Tool` rendering
+  (`toolFromJson`/`renderToolResult`), token hashing + prefixes. Runs in CI
+  ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+- **`ihp-mcp`** — [`ihp-mcp/test/Spec.hs`](ihp-mcp/test/Spec.hs), needs Postgres
+  + the IHP toolchain (so build it under nix; the suite needs `-threaded`). Drives
+  the OAuth token endpoint end-to-end: register → code → token → refresh →
+  reuse-detection, a wrong-PKCE rejection, and **two concurrent code exchanges
+  proving the atomic claim lets exactly one win**. Point `DATABASE_URL` at a DB
+  loaded with [`ihp-mcp/test/schema.sql`](ihp-mcp/test/schema.sql). (Hooking this
+  into CI needs a nix flake for the library — currently consumed flake-less, so
+  it's run locally / under a consumer's toolchain.)
+
 ## Status
 
 - [x] **Phase 1** — `mcp-server` core (`MCP.Protocol.{Types,Tool,Server}`, `MCP.OAuth`, `MCP.OAuth.WellKnown`).
