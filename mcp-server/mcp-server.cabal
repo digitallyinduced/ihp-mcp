@@ -1,0 +1,42 @@
+cabal-version:      2.4
+name:               mcp-server
+version:            0.1.0
+synopsis:           Framework-agnostic Model Context Protocol (MCP) server core
+description:
+    JSON-RPC 2.0 / Streamable-HTTP transport, the tool abstraction, and the
+    OAuth 2.1 token + PKCE primitives for building an MCP server over WAI.
+    Depends on no web framework: pair it with @ihp-mcp@ for IHP storage glue,
+    or wire it to Servant / bare-WAI yourself.
+license:            MIT
+author:             digitally induced GmbH
+maintainer:         marc@digitallyinduced.com
+category:           Network, Web
+build-type:         Simple
+
+library
+    hs-source-dirs:   src
+    default-language: GHC2021
+    exposed-modules:
+        MCP.Protocol.Types
+        MCP.Protocol.Tool
+        MCP.Protocol.Server
+        MCP.OAuth
+        MCP.OAuth.WellKnown
+    default-extensions:
+        OverloadedStrings
+        OverloadedRecordDot
+        DuplicateRecordFields
+        NamedFieldPuns
+        LambdaCase
+        BlockArguments
+    build-depends:
+        base                >=4.16 && <5,
+        text,
+        bytestring,
+        aeson               >=2.0,
+        wai,
+        http-types,
+        crypton,
+        memory,
+        base64-bytestring
+    ghc-options: -Wall -Wno-name-shadowing -Wno-unused-do-bind

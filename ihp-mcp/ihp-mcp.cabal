@@ -1,0 +1,45 @@
+cabal-version:      2.4
+name:               ihp-mcp
+version:            0.1.0
+synopsis:           IHP storage + OAuth glue for the mcp-server core
+description:
+    Wires the framework-agnostic @mcp-server@ core into an IHP application:
+    bearer-token authentication and the OAuth 2.1 authorization server
+    (Dynamic Client Registration + token endpoint) backed by the @api_tokens@
+    / @oauth_*@ tables shipped in @Schema.sql@.
+    .
+    These helpers use raw SQL against fixed table names so the package never
+    imports the host app's @Generated.Types@. The host app provides its own
+    @User@ record, its login session and its consent view.
+license:            MIT
+author:             digitally induced GmbH
+maintainer:         marc@digitallyinduced.com
+category:           Network, Web
+build-type:         Simple
+data-files:         Schema.sql
+
+library
+    hs-source-dirs:   src
+    default-language: GHC2021
+    exposed-modules:
+        IHP.MCP.Auth
+        IHP.MCP.OAuth.Endpoints
+    default-extensions:
+        OverloadedStrings
+        OverloadedRecordDot
+        BlockArguments
+        ImplicitParams
+        NoImplicitPrelude
+    build-depends:
+        base,
+        text,
+        bytestring,
+        time,
+        aeson,
+        wai,
+        http-types,
+        uuid,
+        postgresql-simple,
+        ihp,
+        mcp-server
+    ghc-options: -Wall -Wno-name-shadowing -Wno-unused-do-bind
