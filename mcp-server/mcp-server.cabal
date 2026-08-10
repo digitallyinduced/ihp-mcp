@@ -38,6 +38,7 @@ library
         http-types,
         crypton,
         memory,
+        ram,
         base64-bytestring
     ghc-options: -Wall -Wno-name-shadowing -Wno-unused-do-bind
 
@@ -54,6 +55,7 @@ test-suite spec
     build-depends:
         base,
         text,
+        bytestring,
         aeson,
         hspec,
         mcp-server
