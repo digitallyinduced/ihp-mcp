@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PackageImports #-}
 
@@ -30,7 +31,11 @@ import Data.Text (Text)
 import qualified Data.Text.Encoding as TextEnc
 import qualified Data.ByteString as BS
 import Data.ByteString (ByteString)
-import qualified Data.ByteArray as ByteArray
+#if MIN_VERSION_crypton(1,1,0)
+import qualified "ram" Data.ByteArray as ByteArray
+#else
+import qualified "memory" Data.ByteArray as ByteArray
+#endif
 import qualified "base64-bytestring" Data.ByteString.Base64.URL as B64Url
 import "crypton" Crypto.Hash (hashWith, SHA256 (..), Digest)
 import "crypton" Crypto.Random (getRandomBytes)
