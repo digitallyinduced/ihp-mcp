@@ -13,6 +13,7 @@
 module MCP.Protocol.Server
     ( McpServer (..)
     , defaultMcpServer
+    , Resource (..)
     , handleMcpRequest
     , extractBearer
     ) where
@@ -37,6 +38,34 @@ import MCP.Protocol.Tool
 import MCP.Protocol.Types
 import qualified MCP.OAuth.WellKnown as WellKnown
 
+-- | A principal-scoped text resource. Content is omitted from listings.
+-- Metadata is public protocol metadata, not a place to store credentials.
+data Resource = Resource
+    { resourceUri :: !Text
+    , resourceName :: !Text
+    , resourceDescription :: !(Maybe Text)
+    , resourceMimeType :: !(Maybe Text)
+    , resourceText :: !Text
+    , resourceMetadata :: !(Maybe Value)
+    }
+
+resourceDescriptor :: Resource -> Value
+resourceDescriptor resource = object $
+    [ "uri" .= resource.resourceUri
+    , "name" .= resource.resourceName
+    ] ++
+    maybe [] (\description -> ["description" .= description]) resource.resourceDescription ++
+    maybe [] (\mimeType -> ["mimeType" .= mimeType]) resource.resourceMimeType ++
+    maybe [] (\metadata -> ["_meta" .= metadata]) resource.resourceMetadata
+
+resourceContents :: Resource -> Value
+resourceContents resource = object $
+    [ "uri" .= resource.resourceUri
+    , "text" .= resource.resourceText
+    ] ++
+    maybe [] (\mimeType -> ["mimeType" .= mimeType]) resource.resourceMimeType ++
+    maybe [] (\metadata -> ["_meta" .= metadata]) resource.resourceMetadata
+
 -- | Everything the transport needs from the embedding application.
 data McpServer p = McpServer
     { serverName :: !Text
@@ -49,6 +78,10 @@ data McpServer p = McpServer
     , tools :: Wai.Request -> p -> [Tool]
       -- ^ The tools available to this principal. Receives the request so a
       -- tool can close over e.g. the @Host@ header (for building URLs).
+    , resources :: Wai.Request -> p -> [Resource]
+      -- ^ Authenticated, principal-scoped static text resources.
+    , serverInstructions :: !(Maybe Text)
+      -- ^ Optional instructions returned in the initialize handshake.
     , withScope :: p -> IO JsonRpcResponse -> IO JsonRpcResponse
       -- ^ Wrap @tools/call@ execution — e.g. bind a Postgres row-level-security
       -- context for the principal. A polymorphic wrapper such as
@@ -82,6 +115,8 @@ defaultMcpServer = McpServer
     , serverVersion = "0.1.0"
     , authenticate = \_ -> pure Nothing
     , tools = \_ _ -> []
+    , resources = \_ _ -> []
+    , serverInstructions = Nothing
     , withScope = \_ io -> io
     , resolveIssuer = WellKnown.resolveIssuer "localhost"
     }
@@ -114,7 +149,7 @@ handlePost server request bodyBytes =
                 case authed of
                     Nothing -> pure $ unauthorizedResponse server request rpc.reqId
                     Just p -> case rpc.method of
-                        "initialize" -> pure $ rpcResponse (handleInitialize server rpc)
+                        "initialize" -> pure $ rpcResponse (handleInitialize server request p rpc)
                         "ping" -> pure $ rpcResponse (JsonRpcResult rpc.reqId (object []))
                         _ -> do
                             result <- Exception.try (server.withScope p (dispatch server request p rpc))
@@ -127,6 +162,19 @@ dispatch :: McpServer p -> Wai.Request -> p -> JsonRpcRequest -> IO JsonRpcRespo
 dispatch server request p rpc = case rpc.method of
     "tools/list" -> pure $ JsonRpcResult rpc.reqId $ object
         [ "tools" .= map toolDefinitionJson available ]
+    "resources/list" -> pure $ JsonRpcResult rpc.reqId $ object
+        [ "resources" .= map resourceDescriptor availableResources ]
+    "resources/templates/list" -> pure $ JsonRpcResult rpc.reqId $ object
+        [ "resourceTemplates" .= ([] :: [Value]) ]
+    "resources/read" ->
+        case paramText "uri" rpc.params of
+            Nothing -> pure $ JsonRpcErrorResp rpc.reqId
+                (errorInvalidParams "missing resource uri")
+            Just uri -> case find (\resource -> resource.resourceUri == uri) availableResources of
+                Nothing -> pure $ JsonRpcErrorResp rpc.reqId
+                    (McpError (-32002) "resource not found" Nothing)
+                Just resource -> pure $ JsonRpcResult rpc.reqId $ object
+                    [ "contents" .= [resourceContents resource] ]
     "tools/call" ->
         case paramText "name" rpc.params of
             Nothing -> pure $ JsonRpcErrorResp rpc.reqId (errorInvalidParams "missing tool name")
@@ -141,13 +189,19 @@ dispatch server request p rpc = case rpc.method of
     other -> pure $ JsonRpcErrorResp rpc.reqId (errorMethodNotFound ("unknown method: " <> other))
   where
     available = server.tools request p
+    availableResources = server.resources request p
 
-handleInitialize :: McpServer p -> JsonRpcRequest -> JsonRpcResponse
-handleInitialize server rpc = JsonRpcResult rpc.reqId $ object
+handleInitialize :: McpServer p -> Wai.Request -> p -> JsonRpcRequest -> JsonRpcResponse
+handleInitialize server request p rpc = JsonRpcResult rpc.reqId $ object $
     [ "protocolVersion" .= protocolVersion
-    , "capabilities" .= serverCapabilities
+    , "capabilities" .= if null (server.resources request p)
+        then serverCapabilities
+        else object
+            [ "tools" .= object ["listChanged" .= False]
+            , "resources" .= object ["subscribe" .= False, "listChanged" .= False]
+            ]
     , "serverInfo" .= mkServerInfo server.serverName server.serverVersion
-    ]
+    ] ++ maybe [] (\instructions -> ["instructions" .= instructions]) server.serverInstructions
 
 ------------------------------------------------------------
 -- Auth header

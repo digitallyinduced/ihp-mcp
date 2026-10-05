@@ -46,6 +46,7 @@ test-suite spec
     type:             exitcode-stdio-1.0
     main-is:          Main.hs
     hs-source-dirs:   test
+    other-modules:    AppMetadataSpec
     default-language: GHC2021
     default-extensions:
         OverloadedStrings
@@ -58,5 +59,7 @@ test-suite spec
         bytestring,
         aeson,
         hspec,
+        wai,
+        http-types,
         mcp-server
     ghc-options: -Wall -Wno-name-shadowing

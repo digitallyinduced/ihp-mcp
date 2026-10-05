@@ -64,8 +64,58 @@ line.
 
    A tool's `handler :: Value -> IO ToolResult` closes over the authenticated
    user and the model context — the core never sees them. `ToolResult` is
-   `TextResult` / `ErrorResult` / `RawResult` (the last for pre-built content
-   like image blocks).
+   `TextResult` / `ErrorResult` / `RawResult` (for pre-built content like image
+   blocks), or `AppResult` (see below).
+
+### Resources and application metadata
+
+The framework-free core supports authenticated text resources through
+`resources/list` and `resources/read`. Configure `resources` on
+`defaultMcpServer` with a request/principal-scoped catalog:
+
+```haskell
+server = defaultMcpServer
+    { authenticate = authenticateRequest
+    , resources = \_ principal -> resourcesFor principal
+    , serverInstructions = Just "Read the guide before using the editor."
+    }
+
+editorResource = Resource
+    { resourceUri = "ui://editor"
+    , resourceName = "Editor"
+    , resourceDescription = Just "Interactive document editor"
+    , resourceMimeType = Just "text/html"
+    , resourceText = "<main>Editor</main>"
+    , resourceMetadata = Just (object ["ui" .= object ["prefersBorder" .= True]])
+    }
+```
+
+Descriptors omit resource text; reads return text and MIME type. Optional
+`resourceMetadata` is emitted as `_meta` in both responses. Resource metadata
+is public: do not place credentials there. Resource methods require
+authentication and run inside `withScope`, and inaccessible URIs produce the
+same resource-not-found response as unknown URIs. Only resources in the
+principal's catalog can be read. The initialization response advertises
+resources only for nonempty catalogs; subscriptions and dynamic templates are
+not implemented.
+
+Use `ToolWithMetadata` to attach optional `_meta` and `annotations` objects to
+a tool advertisement. `toolFromJson` also preserves those fields when they
+are objects; malformed extension fields are ignored. The original `Tool`
+constructor and ordinary tool JSON remain unchanged.
+
+`AppResult summary structuredContent clientMetadata` emits the summary as a
+text content block, structured data as `structuredContent`, and client metadata
+only as `_meta`. Clients implementing MCP Apps keep result `_meta` out of the
+model context. This serialization separation is not encryption or an
+authorization boundary; the client receives the entire response, and the
+server must still authorize every request. Do not put client-only values in
+the first two arguments.
+
+Compatibility: existing `defaultMcpServer` record updates need no changes.
+Code constructing `McpServer` directly must supply `resources` and
+`serverInstructions`; exhaustive matches on `Tool` or `ToolResult` must
+handle the new constructors.
 
 3. **OAuth** — wire `IHP.MCP.OAuth.Endpoints` into your `Register` / `Token`
    controllers (one-liners; the handlers take the raw request body):
