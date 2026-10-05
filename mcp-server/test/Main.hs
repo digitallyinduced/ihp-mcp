@@ -12,9 +12,11 @@ import qualified Data.Text as Text
 import MCP.OAuth
 import MCP.Protocol.Types
 import MCP.Protocol.Tool
+import qualified AppMetadataSpec
 
 main :: IO ()
 main = hspec $ do
+    AppMetadataSpec.spec
     describe "PKCE S256 (RFC 7636 Appendix B vector)" $ do
         let verifier  = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
             challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"

@@ -35,6 +35,11 @@ data ToolResult
       -- ^ A pre-built MCP @result@ object, spliced in verbatim. Use this for
       -- structured content the standard envelope can't express — e.g. an
       -- image content block from a document-viewing tool.
+    | AppResult !Text !Value !Value
+      -- ^ Public summary, public structured content, and client metadata.
+      -- Metadata is serialized only into @_meta@, not into model-visible
+      -- content. The client is responsible for honoring that boundary;
+      -- this is not encryption or an authorization mechanism.
 
 -- | A single MCP tool: its advertised schema plus the handler that runs it.
 --
@@ -47,27 +52,50 @@ data Tool = Tool
     , inputSchema :: !Value
     , handler :: Value -> IO ToolResult
     }
+    | ToolWithMetadata
+    { name :: !Text
+    , description :: !Text
+    , inputSchema :: !Value
+    , handler :: Value -> IO ToolResult
+    , toolMetadata :: !(Maybe Value)
+    , toolAnnotations :: !(Maybe Value)
+    }
+    -- ^ Preserves the original constructor for ordinary tools.
 
 -- | The @{ name, description, inputSchema }@ object advertised in @tools/list@.
 toolDefinitionJson :: Tool -> Value
-toolDefinitionJson t = object
+toolDefinitionJson t = object $
     [ "name" .= t.name
     , "description" .= t.description
     , "inputSchema" .= t.inputSchema
-    ]
+    ] ++ case t of
+        Tool {} -> []
+        ToolWithMetadata { toolMetadata, toolAnnotations } ->
+            maybe [] (\metadata -> ["_meta" .= metadata]) toolMetadata
+            ++ maybe [] (\annotations -> ["annotations" .= annotations]) toolAnnotations
 
 -- | Build a 'Tool' from an existing tool-definition object
 -- (@{ name, description, inputSchema }@) plus a handler. Convenient when the
 -- definition already exists as a 'Value' — e.g. migrating code that kept tool
 -- schemas as Aeson literals. Missing/invalid fields default to empty.
 toolFromJson :: Value -> (Value -> IO ToolResult) -> Tool
-toolFromJson def h = Tool
-    { name = textField "name"
-    , description = textField "description"
-    , inputSchema = fromMaybe (object []) (objField "inputSchema")
-    , handler = h
-    }
+toolFromJson def h = case (objectField "_meta", objectField "annotations") of
+    (Nothing, Nothing) -> ordinaryTool
+    (metadata, annotations) -> ToolWithMetadata
+        (name ordinaryTool) (description ordinaryTool) (inputSchema ordinaryTool)
+        h metadata annotations
   where
+    ordinaryTool = Tool
+        { name = textField "name"
+        , description = textField "description"
+        , inputSchema = fromMaybe (object []) (objField "inputSchema")
+        , handler = h
+        }
+    -- Generic protocol plumbing preserves object-shaped extension fields
+    -- without interpreting application-specific payloads.
+    objectField k = case objField k of
+        Just value@(Object _) -> Just value
+        _ -> Nothing
     objField k = case def of
         Object o -> KM.lookup (AesonKey.fromText k) o
         _ -> Nothing
@@ -78,6 +106,12 @@ toolFromJson def h = Tool
 -- | Render a 'ToolResult' into the MCP @tools/call@ result object.
 renderToolResult :: ToolResult -> Value
 renderToolResult (RawResult v) = v
+renderToolResult (AppResult summary structuredContent privateMetadata) = object
+    [ "content" .= ([textBlock summary] :: [Value])
+    , "structuredContent" .= structuredContent
+    , "_meta" .= privateMetadata
+    , "isError" .= False
+    ]
 renderToolResult (TextResult txt) = object
     [ "content" .= ([textBlock txt] :: [Value])
     , "isError" .= False
