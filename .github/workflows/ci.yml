@@ -25,7 +25,8 @@ jobs:
       # cabal-only — the ihp-mcp glue + its OAuth integration test build under
       # the IHP nix toolchain (see test/Spec.hs).
       - name: Isolate the mcp-server package
-        run: echo 'packages: .' > cabal.project
+        run: |
+          echo 'packages: .' > cabal.project
 
       - name: Build
         run: cabal build
